@@ -85,18 +85,15 @@ def update_html(monthly, annual):
     monthly_js = json.dumps(monthly, ensure_ascii=False, separators=(",", ":"))
     annual_js  = json.dumps(annual,  ensure_ascii=False, separators=(",", ":"))
 
-    # Try all possible variable name variants
     monthly_patterns = [
         r"(const MONTHLY_REAL\s*=\s*)\{[\s\S]*?\}(?=;)",
         r"(const monthlyData\s*=\s*)\{[\s\S]*?\}(?=;)",
         r"(var MONTHLY_REAL\s*=\s*)\{[\s\S]*?\}(?=;)",
-        r"(var monthlyData\s*=\s*)\{[\s\S]*?\}(?=;)",
     ]
     annual_patterns = [
         r"(const ANNUAL\s*=\s*)\{[\s\S]*?\}(?=;)",
         r"(const annualData\s*=\s*)\{[\s\S]*?\}(?=;)",
         r"(var ANNUAL\s*=\s*)\{[\s\S]*?\}(?=;)",
-        r"(var annualData\s*=\s*)\{[\s\S]*?\}(?=;)",
     ]
 
     monthly_replaced = False
@@ -116,48 +113,31 @@ def update_html(monthly, annual):
             break
 
     if not monthly_replaced:
-        print("ERROR: Could not find monthly data variable! Searching for clues...")
-        for keyword in ["MONTHLY", "monthly", "monthData", "месяц"]:
-            idx = html.find(keyword)
-            if idx > 0:
-                print(f"  Found '{keyword}' at pos {idx}: ...{html[idx:idx+80]}...")
-                break
-
+        print("ERROR: Could not find monthly data variable!")
     if not annual_replaced:
-        print("ERROR: Could not find annual data variable! Searching for clues...")
-        for keyword in ["ANNUAL", "annual", "annualData", "годов"]:
-            idx = html.find(keyword)
-            if idx > 0:
-                print(f"  Found '{keyword}' at pos {idx}: ...{html[idx:idx+80]}...")
-                break
+        print("ERROR: Could not find annual data variable!")
 
-    # Update date in badge — try multiple patterns
+    # Date: format "16 июня 2026 г."
     months_ru = ["января","февраля","марта","апреля","мая","июня",
                  "июля","августа","сентября","октября","ноября","декабря"]
     now = datetime.utcnow()
     date_str = f"{now.day} {months_ru[now.month-1]} {now.year} г."
 
-    date_patterns = [
-        r"document\.getElementById\('lastUpdatedLine'\)\.textContent\s*=\s*'[^']*';",
-        r'document\.getElementById\("lastUpdatedLine"\)\.textContent\s*=\s*"[^"]*";',
-    ]
-    date_replaced = False
-    for pat in date_patterns:
-        if re.search(pat, html):
-            html = re.sub(pat,
-                f"document.getElementById('lastUpdatedLine').textContent = 'Обновлено {date_str}';",
-                html, count=1)
-            print(f"Date updated to: {date_str}")
-            date_replaced = True
-            break
-
-    if not date_replaced:
-        print(f"WARNING: Could not update date. Will show stale date.")
+    # Replace span content directly in HTML — most reliable
+    new_span = f'<span class="badge-updated" id="lastUpdatedLine">Обновлено {date_str}</span>'
+    html, n = re.subn(
+        r'<span[^>]*id=["\']lastUpdatedLine["\'][^>]*>.*?</span>',
+        new_span, html, count=1, flags=re.DOTALL
+    )
+    if n:
+        print(f"Date updated in HTML span to: {date_str}")
+    else:
+        print(f"WARNING: Could not update date span.")
 
     with open("index.html", "w", encoding="utf-8") as f:
         f.write(html)
 
-    print(f"index.html saved. Monthly replaced: {monthly_replaced}, Annual replaced: {annual_replaced}")
+    print(f"index.html saved. Monthly: {monthly_replaced}, Annual: {annual_replaced}")
     last_year = max(monthly.keys())
     filled = len([m for m in monthly[last_year] if m is not None])
     print(f"Latest data: {last_year}, {filled} months")
