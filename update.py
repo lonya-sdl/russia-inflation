@@ -35,9 +35,9 @@ def parse_csv(content):
     if header_idx is None:
         header_idx = 0
 
-    data_rows = rows[header_idx + 1:]
+    print(f"Header row index: {header_idx}")
 
-    for row in data_rows:
+    for row in rows[header_idx + 1:]:
         if not row or not row[0].strip():
             continue
         try:
@@ -66,14 +66,12 @@ def parse_csv(content):
             except:
                 if vals:
                     total = 1.0
-                    for v in vals:
-                        total *= (1 + v / 100)
+                    for v in vals: total *= (1 + v / 100)
                     annual[year] = round((total - 1) * 100, 2)
         else:
             if vals:
                 total = 1.0
-                for v in vals:
-                    total *= (1 + v / 100)
+                for v in vals: total *= (1 + v / 100)
                 annual[year] = round((total - 1) * 100, 2)
 
     return monthly, annual
@@ -82,59 +80,97 @@ def update_html(monthly, annual):
     with open("index.html", "r", encoding="utf-8") as f:
         html = f.read()
 
-    # Keys used in the current index.html
+    print(f"index.html size: {len(html)} chars")
+
     monthly_js = json.dumps(monthly, ensure_ascii=False, separators=(",", ":"))
     annual_js  = json.dumps(annual,  ensure_ascii=False, separators=(",", ":"))
 
-    # Update MONTHLY_REAL (current variable name in index.html)
-    html = re.sub(
+    # Try all possible variable name variants
+    monthly_patterns = [
         r"(const MONTHLY_REAL\s*=\s*)\{[\s\S]*?\}(?=;)",
-        r"\g<1>" + monthly_js,
-        html, count=1
-    )
-
-    # Update ANNUAL (current variable name in index.html)
-    html = re.sub(
+        r"(const monthlyData\s*=\s*)\{[\s\S]*?\}(?=;)",
+        r"(var MONTHLY_REAL\s*=\s*)\{[\s\S]*?\}(?=;)",
+        r"(var monthlyData\s*=\s*)\{[\s\S]*?\}(?=;)",
+    ]
+    annual_patterns = [
         r"(const ANNUAL\s*=\s*)\{[\s\S]*?\}(?=;)",
-        r"\g<1>" + annual_js,
-        html, count=1
-    )
+        r"(const annualData\s*=\s*)\{[\s\S]*?\}(?=;)",
+        r"(var ANNUAL\s*=\s*)\{[\s\S]*?\}(?=;)",
+        r"(var annualData\s*=\s*)\{[\s\S]*?\}(?=;)",
+    ]
 
-    # Update real update date in the badge
-    # Format: "16 июня 2026 г."
+    monthly_replaced = False
+    for pat in monthly_patterns:
+        if re.search(pat, html):
+            html = re.sub(pat, r"\g<1>" + monthly_js, html, count=1)
+            print(f"Monthly data replaced using pattern: {pat[:40]}")
+            monthly_replaced = True
+            break
+
+    annual_replaced = False
+    for pat in annual_patterns:
+        if re.search(pat, html):
+            html = re.sub(pat, r"\g<1>" + annual_js, html, count=1)
+            print(f"Annual data replaced using pattern: {pat[:40]}")
+            annual_replaced = True
+            break
+
+    if not monthly_replaced:
+        print("ERROR: Could not find monthly data variable! Searching for clues...")
+        for keyword in ["MONTHLY", "monthly", "monthData", "месяц"]:
+            idx = html.find(keyword)
+            if idx > 0:
+                print(f"  Found '{keyword}' at pos {idx}: ...{html[idx:idx+80]}...")
+                break
+
+    if not annual_replaced:
+        print("ERROR: Could not find annual data variable! Searching for clues...")
+        for keyword in ["ANNUAL", "annual", "annualData", "годов"]:
+            idx = html.find(keyword)
+            if idx > 0:
+                print(f"  Found '{keyword}' at pos {idx}: ...{html[idx:idx+80]}...")
+                break
+
+    # Update date in badge — try multiple patterns
     months_ru = ["января","февраля","марта","апреля","мая","июня",
                  "июля","августа","сентября","октября","ноября","декабря"]
     now = datetime.utcnow()
     date_str = f"{now.day} {months_ru[now.month-1]} {now.year} г."
 
-    # Replace the static date placeholder in the JS date calculation block
-    # We inject a data attribute so JS can read the real date
-    html = re.sub(
-        r"(document\.getElementById\('lastUpdatedLine'\)\.textContent\s*=\s*)'Обновлено: —'",
-        r"\1'Обновлено: —'",
-        html, count=1
-    )
+    date_patterns = [
+        r"document\.getElementById\('lastUpdatedLine'\)\.textContent\s*=\s*'[^']*';",
+        r'document\.getElementById\("lastUpdatedLine"\)\.textContent\s*=\s*"[^"]*";',
+    ]
+    date_replaced = False
+    for pat in date_patterns:
+        if re.search(pat, html):
+            html = re.sub(pat,
+                f"document.getElementById('lastUpdatedLine').textContent = 'Обновлено {date_str}';",
+                html, count=1)
+            print(f"Date updated to: {date_str}")
+            date_replaced = True
+            break
 
-    # Simpler: replace the entire lastUpdatedLine init with a hardcoded real date
-    html = re.sub(
-        r"document\.getElementById\('lastUpdatedLine'\)\.textContent\s*=\s*'Обновлено[^']*';",
-        f"document.getElementById('lastUpdatedLine').textContent = 'Обновлено {date_str}';",
-        html, count=1
-    )
+    if not date_replaced:
+        print(f"WARNING: Could not update date. Will show stale date.")
 
     with open("index.html", "w", encoding="utf-8") as f:
         f.write(html)
 
+    print(f"index.html saved. Monthly replaced: {monthly_replaced}, Annual replaced: {annual_replaced}")
     last_year = max(monthly.keys())
-    last_months = [m for m in monthly[last_year] if m is not None]
-    print(f"Updated: {len(monthly)} years, latest {last_year} — {len(last_months)} months filled")
-    print(f"Date set to: {date_str}")
+    filled = len([m for m in monthly[last_year] if m is not None])
+    print(f"Latest data: {last_year}, {filled} months")
 
 if __name__ == "__main__":
-    print("Fetching data from statbureau.org...")
+    print("=== Inflation updater starting ===")
+    print(f"Time: {datetime.utcnow().isoformat()}")
+    print("Fetching CSV...")
     content = fetch_data()
-    print("Parsing CSV...")
+    print(f"CSV fetched: {len(content)} chars")
+    print("Parsing...")
     monthly, annual = parse_csv(content)
+    print(f"Parsed: {len(monthly)} years")
     print("Updating index.html...")
     update_html(monthly, annual)
-    print("Done.")
+    print("=== Done ===")
