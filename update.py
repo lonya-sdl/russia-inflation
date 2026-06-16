@@ -2,6 +2,7 @@ import csv
 import json
 import re
 import urllib.request
+from datetime import datetime
 
 CSV_URL = "https://www.statbureau.org/ru/russia/inflation-tables/inflation.monthly.csv"
 
@@ -17,13 +18,11 @@ def parse_csv(content):
     reader = csv.reader(content.splitlines())
     rows = list(reader)
 
-    # Find header row (contains month names)
     header_idx = None
     for i, row in enumerate(rows):
         if row and any(cell.strip().lower() in ["jan", "january", "янв", "jan."] for cell in row):
             header_idx = i
             break
-        # Try numeric — sometimes header is just numbers 1..12
         if row and len(row) >= 13:
             try:
                 ints = [int(c.strip()) for c in row[1:13]]
@@ -34,7 +33,6 @@ def parse_csv(content):
                 pass
 
     if header_idx is None:
-        # Fallback: assume first row is header
         header_idx = 0
 
     data_rows = rows[header_idx + 1:]
@@ -60,21 +58,18 @@ def parse_csv(content):
 
         monthly[year] = months
 
-        # Annual total: last column (index 13) if present
+        vals = [m for m in months if m is not None]
         if len(row) > 13:
             raw = row[13].strip().strip('"').replace(",", ".").replace(" ", "")
             try:
                 annual[year] = float(raw)
             except:
-                # Calculate from months
-                vals = [m for m in months if m is not None]
                 if vals:
                     total = 1.0
                     for v in vals:
                         total *= (1 + v / 100)
                     annual[year] = round((total - 1) * 100, 2)
         else:
-            vals = [m for m in months if m is not None]
             if vals:
                 total = 1.0
                 for v in vals:
@@ -87,29 +82,53 @@ def update_html(monthly, annual):
     with open("index.html", "r", encoding="utf-8") as f:
         html = f.read()
 
+    # Keys used in the current index.html
     monthly_js = json.dumps(monthly, ensure_ascii=False, separators=(",", ":"))
     annual_js  = json.dumps(annual,  ensure_ascii=False, separators=(",", ":"))
 
+    # Update MONTHLY_REAL (current variable name in index.html)
     html = re.sub(
-        r"(const monthlyData\s*=\s*)\{[\s\S]*?\}(?=;)",
+        r"(const MONTHLY_REAL\s*=\s*)\{[\s\S]*?\}(?=;)",
         r"\g<1>" + monthly_js,
-        html,
-        count=1
+        html, count=1
     )
+
+    # Update ANNUAL (current variable name in index.html)
     html = re.sub(
-        r"(const annualData\s*=\s*)\{[\s\S]*?\}(?=;)",
+        r"(const ANNUAL\s*=\s*)\{[\s\S]*?\}(?=;)",
         r"\g<1>" + annual_js,
-        html,
-        count=1
+        html, count=1
+    )
+
+    # Update real update date in the badge
+    # Format: "16 июня 2026 г."
+    months_ru = ["января","февраля","марта","апреля","мая","июня",
+                 "июля","августа","сентября","октября","ноября","декабря"]
+    now = datetime.utcnow()
+    date_str = f"{now.day} {months_ru[now.month-1]} {now.year} г."
+
+    # Replace the static date placeholder in the JS date calculation block
+    # We inject a data attribute so JS can read the real date
+    html = re.sub(
+        r"(document\.getElementById\('lastUpdatedLine'\)\.textContent\s*=\s*)'Обновлено: —'",
+        r"\1'Обновлено: —'",
+        html, count=1
+    )
+
+    # Simpler: replace the entire lastUpdatedLine init with a hardcoded real date
+    html = re.sub(
+        r"document\.getElementById\('lastUpdatedLine'\)\.textContent\s*=\s*'Обновлено[^']*';",
+        f"document.getElementById('lastUpdatedLine').textContent = 'Обновлено {date_str}';",
+        html, count=1
     )
 
     with open("index.html", "w", encoding="utf-8") as f:
         f.write(html)
 
-    print(f"Updated: {len(monthly)} years of monthly data, {len(annual)} years of annual data")
     last_year = max(monthly.keys())
     last_months = [m for m in monthly[last_year] if m is not None]
-    print(f"Latest: {last_year}, {len(last_months)} months filled")
+    print(f"Updated: {len(monthly)} years, latest {last_year} — {len(last_months)} months filled")
+    print(f"Date set to: {date_str}")
 
 if __name__ == "__main__":
     print("Fetching data from statbureau.org...")
